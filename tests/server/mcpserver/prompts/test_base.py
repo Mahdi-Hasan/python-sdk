@@ -1,4 +1,6 @@
 import threading
+from collections import UserList
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +17,7 @@ from mcp_types import (
     TextResourceContents,
 )
 
-from mcp import MCPError
+from mcp import Client, MCPError
 from mcp.server.mcpserver import AssistantMessage, Audio, Context, Image, MCPServer, Message, UserMessage
 from mcp.server.mcpserver.prompts.base import Prompt
 
@@ -320,6 +322,49 @@ async def test_bare_content_returned_from_a_prompt_becomes_user_messages(returne
         return returned
 
     assert await Prompt.from_function(fn).render(None, Context()) == expected
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("returned", "expected"),
+    [
+        (
+            UserList([UserMessage("Question"), AssistantMessage("Answer")]),
+            [UserMessage("Question"), AssistantMessage("Answer")],
+        ),
+        (UserList(["Look at this:", _PNG]), [UserMessage("Look at this:"), UserMessage(_PNG_BLOCK)]),
+        (UserList[Message](), []),
+    ],
+)
+async def test_prompt_returning_a_non_list_sequence_renders_one_message_per_item(
+    returned: Any, expected: list[Message]
+):
+    """SDK-defined: `SyncPromptResult` accepts any `Sequence`, so a sequence that is not a `list` or
+    `tuple` renders item by item, like those do, instead of being JSON-dumped into one text message."""
+
+    def fn() -> Any:
+        return returned
+
+    assert await Prompt.from_function(fn).render(None, Context()) == expected
+
+
+@pytest.mark.anyio
+async def test_prompt_returning_a_non_list_sequence_through_the_client_keeps_roles_and_order() -> None:
+    """SDK-defined: the per-item rendering of a `Sequence` result reaches the client as separate
+    messages with their own roles."""
+    mcp = MCPServer()
+
+    @mcp.prompt()
+    def conversation() -> Sequence[Message]:
+        return UserList([UserMessage("Question"), AssistantMessage("Answer")])
+
+    async with Client(mcp) as client:
+        result = await client.get_prompt("conversation")
+
+    assert [(m.role, m.content) for m in result.messages] == [
+        ("user", TextContent(type="text", text="Question")),
+        ("assistant", TextContent(type="text", text="Answer")),
+    ]
 
 
 @pytest.mark.anyio

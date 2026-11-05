@@ -192,7 +192,7 @@ class Prompt(BaseModel):
                 return result
 
             # Validate messages
-            if not isinstance(result, list | tuple):
+            if not isinstance(result, Sequence) or isinstance(result, str):
                 result = [result]
 
             # Convert result to messages
