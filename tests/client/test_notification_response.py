@@ -6,6 +6,7 @@ that don't follow SDK conventions.
 
 import json
 
+import anyio
 import httpx2
 import mcp_types as types
 import pytest
@@ -238,6 +239,24 @@ async def test_client_surfaces_jsonrpc_error_from_non_2xx_body_with_correlated_i
                 with pytest.raises(MCPError) as exc:
                     await session.list_tools()
                 assert exc.value.error.code == types.METHOD_NOT_FOUND
+
+
+async def test_client_surfaces_jsonrpc_error_from_200_json_body_with_null_id() -> None:
+    """SDK-defined: a JSON-RPC error with ``id: null`` in a ``200 application/json`` body answers
+    the POST that received it, so the pending request resolves with the server's error instead of
+    waiting for a reply that never arrives (same correlation as the non-2xx and SSE paths)."""
+    body = json.dumps(
+        {"jsonrpc": "2.0", "id": None, "error": {"code": types.INVALID_PARAMS, "message": "nope"}}
+    ).encode()
+    app = _create_non_2xx_json_body_app(200, body)
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app)) as client:
+        async with streamable_http_client("http://localhost/mcp", http_client=client) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                with anyio.fail_after(5):
+                    with pytest.raises(MCPError) as exc:
+                        await session.list_tools()
+                assert exc.value.error.code == types.INVALID_PARAMS
 
 
 async def test_client_falls_back_to_generic_error_when_non_2xx_body_is_a_jsonrpc_result() -> None:
